@@ -1,0 +1,15 @@
+{
+  "name": "tool-timeline",
+  "owner": { "name": "wonwoo" },
+  "metadata": {
+    "description": "The tool-timeline mod for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "tool-timeline",
+      "source": "./",
+      "description": "Folds each turn's tool calls into one line under the turn's closing line, with how long each took and the slowest highlighted.",
+      "version": "0.1.0"
+    }
+  ]
+}
