@@ -785,6 +785,52 @@ test('a call that runs half a minute or more raises a notification when it ends'
   expect(sent).toEqual(['Bash finished in 31.0s · npm run build', 'Bash failed after 40.0s · make'])
 })
 
+test('a command sent on to the background sets no usual time, nor is told as finished', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  on('session.root', async () => ({ value: ROOT }))
+  const kept: Record<string, unknown> = {}
+  on('store.get', async (_, e) => ({ value: kept[e.key] }) as never)
+  on('store.set', async (_, e) => {
+    kept[e.key] = e.value
+    return { value: undefined } as never
+  })
+  const sent: string[] = []
+  on('ui.notify', async (_, e) => {
+    sent.push(e.text)
+    return { value: { isSent: true, channel: 'iterm2' } } as never
+  })
+  // Sent to the background at once by its own flag, at its timeout half a minute in, or run through
+  on('tool.call', async (_, e) => {
+    const shell = { stdout: '', stderr: '', interrupted: false }
+    if ((e as { run_in_background?: boolean }).run_in_background === true) {
+      await clock.sleep(100)
+      return { result: { ...shell, backgroundTaskId: 'b1' } } as never
+    }
+    if (commandOf(e) === 'npm run e2e') {
+      await clock.sleep(31_000)
+      return { result: { ...shell, backgroundTaskId: 'b2', timedOutAfterMs: 31_000 } } as never
+    }
+    await clock.sleep(2_000)
+    return { result: { ...shell, stdout: 'ok' } } as never
+  })
+  on('turn.start', async (_, e) => ({ turnId: e.turnId }))
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  for (const [input, ms] of [
+    [{ command: 'npm test', run_in_background: true }, 100],
+    [{ command: 'npm run e2e' }, 31_000],
+    [{ command: 'npm test' }, 2_000],
+  ] as const) {
+    const run = $.tool.call({ tool: 'Bash', ...input })
+    await clock.advance(ms)
+    await run
+  }
+  await clock.advance(0)
+
+  expect(kept.durations).toEqual({ [inRoot('Bash:npm test')]: [2_000] })
+  expect(sent).toEqual([])
+})
+
 test('a Bash command failing three times in a row says so once, again only after a run of it went through', async ($, on) => {
   mock.clock(on, { now: 0 })
   const toasts: string[] = []

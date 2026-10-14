@@ -397,10 +397,13 @@ export const register: Register = on => {
 
     let outcome: TimelineOutcome = 'error'
     let output: string | undefined
+    // A command sent on to the background, by its own flag, by ctrl+b or at its timeout: the call ends, the command not
+    let isBackgrounded = false
     try {
       const ran = await next(e)
       // As the model read it; a hook's own result carries no text, its result then read when it is one
       output = ran.text ?? (typeof ran.result === 'string' ? ran.result : undefined)
+      isBackgrounded = typeof (ran.result as { backgroundTaskId?: unknown } | null | undefined)?.backgroundTaskId === 'string'
       // Refused by a plugin, by a rule, by the person at the dialog, or by auto mode's classifier
       const isRefused =
         ran.deny !== undefined || refusals.has(id) || (ran.isError === true && REFUSED_TEXTS.some(text => output?.startsWith(text) === true))
@@ -415,12 +418,13 @@ export const register: Register = on => {
       await update($, calls, list =>
         list.map(one => (one.id === id ? { ...one, endedAt, outcome, ...evidence } : one)),
       )
-      // Only a call that ran through sets what is usual
-      if (kind !== undefined && outcome === 'ok') {
+      // Only a call that ran through sets what is usual; a backgrounded one says nothing of how long its command takes
+      if (kind !== undefined && outcome === 'ok' && !isBackgrounded) {
         await recordDuration($, usualKey(root, kind), ms)
       }
-      // A long call's end is worth hearing from another window; a denied one ended at the person's own answer
-      if (ms >= LONG_CALL_MS && outcome !== 'denied') {
+      // A long call's end is worth hearing from another window; a denied one ended at the person's own answer, a
+      // backgrounded one's command has not finished
+      if (ms >= LONG_CALL_MS && outcome !== 'denied' && !isBackgrounded) {
         const verb = outcome === 'ok' ? 'finished in' : 'failed after'
         void $.ui.notify(`${call.tool} ${verb} ${formatMs(ms)}${call.detail === '' ? '' : ` · ${call.detail}`}`).catch(() => {})
       }
