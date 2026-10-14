@@ -56,7 +56,8 @@ to hide it.
 
 `/tool-timeline` opens a pane with the turn under way, drawn live, and below it your ten latest turns: how long
 each took, how long ago, its slowest call and what you asked. Click one to unfold it there. The turn under way
-shows its ten latest calls, an earlier one its ten slowest, and a line counts the rest.
+shows its ten latest calls, an earlier one its ten slowest, and a line counts the rest. On the turn under way, click
+that line to list the calls before its latest ten too.
 
 <img src="docs/images/pane.png" width="880" alt="The pane: this turn's lanes and calls, a build 14.1s into its usual 20s, then the earlier turn in columns">
 

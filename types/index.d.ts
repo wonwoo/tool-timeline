@@ -70,9 +70,11 @@ declare module 'claude-code' {
       toldUsual: string
       // How many times in a row each Bash command failed, by its kind; a command that ran through is let go
       failStreaks: Record<string, number>
-      // The start of what the current turn was asked; the earlier turns the pane has unfolded, by id
+      // The start of what the current turn was asked; the earlier turns the pane has unfolded, by id; the turn whose
+      // calls before its latest ten the pane lists too, by when it started, none while it lists those ten alone
       turnPrompt: string
       paneOpen: string[]
+      paneAllCalls: number | null
     }
   }
 }

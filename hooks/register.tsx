@@ -130,9 +130,11 @@ const expanded = atom({ plugin: 'tool-timeline', key: 'expanded' } as const, [])
 const whys = atom({ plugin: 'tool-timeline', key: 'whys' } as const, {})
 const toldUsual = atom({ plugin: 'tool-timeline', key: 'toldUsual' } as const, '')
 const failStreaks = atom({ plugin: 'tool-timeline', key: 'failStreaks' } as const, {})
-// The start of what the current turn was asked; the earlier turns the pane has unfolded
+// The start of what the current turn was asked; the earlier turns the pane has unfolded; the turn whose calls before
+// its latest ten the pane lists too, by when it started
 const turnPrompt = atom({ plugin: 'tool-timeline', key: 'turnPrompt' } as const, '')
 const paneOpen = atom({ plugin: 'tool-timeline', key: 'paneOpen' } as const, [])
+const paneAllCalls = atom({ plugin: 'tool-timeline', key: 'paneAllCalls' } as const, null)
 // The calls under way the engine refused, from `tool.check` to the call's end: one dispatch of `tool.call` reads its
 // state as of one moment, so it would not see a refusal written there
 const refusals = new Set<string>()
@@ -158,6 +160,15 @@ type DesktopKit = { Box: ElementConstructor<BoxProps>; Text: TextElement; Svg: E
 // What the pane draws a turn with: glyphs, pictures where the terminal draws them, or the desktop's columns; in so many
 // columns
 type PaneDraw = { Text: TextElement; pictures?: Pictures; desktop?: DesktopKit; columns: number }
+// The current turn's calls before its latest ten: whether the pane lists them, and the press that lists or leaves them,
+// on a region of its own where the surface has one, a button elsewhere
+type EarlierCalls = {
+  Box: ElementConstructor<BoxProps>
+  Button: ElementConstructor<ButtonProps>
+  Client: ElementConstructor<ClientProps> | undefined
+  isShown: boolean
+  toggle: () => unknown
+}
 // What the pane draws its earlier turns' lines with: a region for each line's words where the surface has one, a
 // button elsewhere
 type HistoryKit = {
@@ -467,6 +478,7 @@ export const register: Register = on => {
     // The turns before, newest first; the current one, once done, is the one drawn above
     const time = await $.clock.now()
     const open = await read($, paneOpen)
+    const allCallsOf = await read($, paneAllCalls)
     const earlier = (await read($, turns))
       .filter(one => !(isDone && one.startedAt === startedAt))
       .slice(-MAX_PANE_TURNS)
@@ -503,7 +515,7 @@ export const register: Register = on => {
           {slowest !== undefined && <Text color={SLOW_COLOR}>{`${slowest.call.tool} ${formatMs(slowest.ms)}`}</Text>}
         </Text>
         <Text> </Text>
-        {paneTurnBody(current, turn, rows, true)}
+        {paneTurnBody(current, turn, rows, true, { Box, Button, Client, isShown: allCallsOf === startedAt, toggle: () => togglePaneAllCalls($) })}
         {history()}
       </Box>
     ))
@@ -547,10 +559,15 @@ export const register: Register = on => {
     return foldedTurn($, $.ui.resolve(e), turn, await next(e))
   })
 
-  // A press on a turn's folded line on the terminal, on one of its unfolded rows, or on an earlier turn's line in the
-  // pane, which their regions post
+  // A press on a turn's folded line on the terminal, on one of its unfolded rows, on an earlier turn's line in the pane
+  // or on the line for the current turn's earlier calls, which their regions post
   on('ui.message', async ($, e, next) => {
-    const { toggle, why, open } = (e.data ?? {}) as { toggle?: unknown; why?: { turnId?: unknown; callId?: unknown }; open?: unknown }
+    const { toggle, why, open, earlier } = (e.data ?? {}) as {
+      toggle?: unknown
+      why?: { turnId?: unknown; callId?: unknown }
+      open?: unknown
+      earlier?: unknown
+    }
     if (e.module === 'hooks/summary.tsx' && typeof toggle === 'string') {
       await toggleTurn($, toggle)
 
@@ -563,6 +580,11 @@ export const register: Register = on => {
     }
     if (e.module === 'hooks/row.tsx' && typeof why?.turnId === 'string' && typeof why.callId === 'string') {
       await askWhy($, why.turnId, why.callId)
+
+      return {}
+    }
+    if (e.module === 'hooks/earlier.tsx' && earlier === true) {
+      await togglePaneAllCalls($)
 
       return {}
     }
@@ -672,6 +694,13 @@ function toggleTurn($: EngineInterface, turnId: string) {
 // The pane unfolds its earlier turns apart from the transcript's folds
 function togglePaneTurn($: EngineInterface, turnId: string) {
   return update($, paneOpen, ids => (ids.includes(turnId) ? ids.filter(id => id !== turnId) : [...ids, turnId]))
+}
+
+// The pane's current turn listing its calls before its latest ten, or leaving them out again
+async function togglePaneAllCalls($: EngineInterface) {
+  const startedAt = await read($, turnStartedAt)
+
+  return update($, paneAllCalls, at => (at === startedAt ? null : startedAt))
 }
 
 // Ghostty (cmux, built on it, says so too) and kitty draw pictures; any other terminal keeps the glyphs, as does a
@@ -798,8 +827,9 @@ async function foldedTurn($: EngineInterface, kit: Kit, turn: TimelineTurn, engi
 
 // A turn as the pane draws it: its lanes, then its calls in the order they ran
 // At most ten of its calls under the lanes: the current turn's latest, in the order they ran, so the running one stays
-// in sight; an earlier one's slowest, repeated calls sharing a row, as its fold lists them; a line counts the rest
-function paneTurnBody(draw: PaneDraw, turn: TimelineTurn, rows: Row[], isCurrent: boolean) {
+// in sight; an earlier one's slowest, repeated calls sharing a row, as its fold lists them; a line counts the rest. The
+// current turn's line is pressed to list its earlier calls too, and again to leave them out
+function paneTurnBody(draw: PaneDraw, turn: TimelineTurn, rows: Row[], isCurrent: boolean, more?: EarlierCalls) {
   const { Text, pictures, desktop, columns } = draw
   const lanes = lanesOf(turn)
   // As wide as the pane leaves beside a lane's name and the longest totals, so no lane's are cut
@@ -809,30 +839,52 @@ function paneTurnBody(draw: PaneDraw, turn: TimelineTurn, rows: Row[], isCurrent
   if (rows.length === 0) {
     return laneLines
   }
-  const shown = isCurrent ? rows.slice(-MAX_UNFOLDED_ROWS) : groupedRows(rows).sort((a, b) => b.ms - a.ms).slice(0, MAX_UNFOLDED_ROWS)
+  const shown = isCurrent
+    ? rows.slice(more?.isShown === true ? 0 : -MAX_UNFOLDED_ROWS)
+    : groupedRows(rows).sort((a, b) => b.ms - a.ms).slice(0, MAX_UNFOLDED_ROWS)
   const hidden = rows.length - shown.reduce((sum, row) => sum + row.count, 0)
+  // The current turn's calls before its latest ten, listed or not
+  const earlier = isCurrent ? Math.max(0, rows.length - MAX_UNFOLDED_ROWS) : 0
   // The bars against the slowest call; an earlier turn's against its first row, which may hold several
   const slowest = isCurrent ? slowestOf(rows) : (shown[0] ?? slowestOf(rows))
   const nameWidth = nameWidthOf(shown)
   // Wide enough for the longest name, as the lanes' count column is, and a gap before what it ran on
   const nameCells = Math.ceil(nameWidth * DESKTOP_CELLS_PER_LETTER) + 3
-  // The branch in its column on the desktop, as the rows' is
-  const note = (lead: string, words: string) =>
-    desktop !== undefined ? (
+  // The branch in its column on the desktop, as the rows' is; a line pressed for its calls lights under the pointer on
+  // the terminal, as an earlier turn's line does, where a button would invert
+  const note = (lead: string, words: string, onPress?: () => unknown) => {
+    const label = desktop !== undefined ? `… ${words}` : `${lead} … ${words}`
+    if (more?.Client !== undefined && desktop === undefined && onPress !== undefined) {
+      return (
+        <more.Box flexDirection="row">
+          <Text dimColor>{`${lead} `}</Text>
+          <more.Client key="pane-earlier" module="./earlier.tsx" props={{ words: `… ${words}` }} />
+        </more.Box>
+      )
+    }
+    const line =
+      more !== undefined && onPress !== undefined ? (
+        <more.Button key="pane-earlier" plain dimColor label={label} onPress={onPress} />
+      ) : (
+        <Text dimColor>{label}</Text>
+      )
+
+    return desktop !== undefined ? (
       <desktop.Box flexDirection="row">
         <desktop.Box width={DESKTOP_MARK_CELLS}>
           <Text dimColor>{lead}</Text>
         </desktop.Box>
-        <Text dimColor>{`… ${words}`}</Text>
+        {line}
       </desktop.Box>
     ) : (
-      <Text dimColor>{`${lead} … ${words}`}</Text>
+      line
     )
+  }
 
   return [
     ...laneLines,
     <Text> </Text>,
-    isCurrent && hidden > 0 && note('├', leftOut(hidden, 'earlier')),
+    earlier > 0 && note('├', leftOut(earlier, 'earlier'), more?.toggle),
     ...shown.map((row, i) => {
       const lead = i === shown.length - 1 && (isCurrent || hidden === 0) ? '└ ' : '├ '
 

@@ -236,10 +236,21 @@ test("the pane lists ten of a turn's calls at most: the current one's latest, an
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   // The current turn's latest ten in the order they ran, a line first for the ones before
-  expect(await ui.find({ type: 'Text', text: /^├ … 2 earlier calls$/ })).toBeDefined()
+  const earlier = { type: 'Text', text: /^… 2 earlier calls$/, in: 'pane-earlier' } as const
+  expect(await ui.find(earlier)).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /· Read +\/f2$/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /^├ +100ms \S+ · Read +\/f3$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^└ +100ms \S+ · Read +\/f12$/ })).toBeDefined()
+  // Under the pointer its words light up, as an earlier turn's line does; a press lists the ones before too, under
+  // it; again, and they are left out
+  await ui.pointer({ type: 'enter', x: 4, y: 0, in: 'pane-earlier' })
+  expect((await ui.find(earlier))?.props.dimColor).toBe(false)
+  await press(ui, 'pane-earlier')
+  expect(await ui.find({ type: 'Text', text: /^├ +100ms \S+ · Read +\/f1$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^├ +100ms \S+ · Read +\/f2$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^└ +100ms \S+ · Read +\/f12$/ })).toBeDefined()
+  await press(ui, 'pane-earlier')
+  expect(await ui.find({ type: 'Text', text: /· Read +\/f2$/ })).toBeUndefined()
   // An earlier turn unfolded: its ten slowest, slowest first, a line last for the faster one
   await press(ui, 'history-t0')
   expect(await ui.find({ type: 'Text', text: /^├ +1\.1s ▆{10} · Bash +step 11$/ })).toBeDefined()
@@ -256,10 +267,24 @@ test("the pane lists ten of a turn's calls at most: the current one's latest, an
 
   // The desktop says the same, the branch in its own column; the earlier turn stays unfolded from the press above
   const desktop = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await desktop.find({ type: 'Text', text: /^… 2 earlier calls$/ })).toBeDefined()
+  expect(await desktop.find({ type: 'Button', key: 'pane-earlier', text: /^… 2 earlier calls$/ })).toBeDefined()
   expect(await desktop.find({ type: 'Text', text: /^… 1 faster call$/ })).toBeDefined()
   expect(await desktop.find({ type: 'Text', text: /^\/f2$/ })).toBeUndefined()
+  // There too a press lists them
+  await desktop.press({ key: 'pane-earlier' })
+  expect(await desktop.find({ type: 'Text', text: /^\/f2$/ })).toBeDefined()
   await desktop.unmount()
+
+  // A new turn lists its latest ten again, the press having listed the turn before's
+  await $.turn.complete({ answer: 'ok', durationMs: 1_200, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.turn.start({ text: 'two', turnId: 't2' })
+  for (let i = 1; i <= 11; i++) {
+    await run($.tool.call({ tool: 'Read', file_path: `/g${i}` }), 100)
+  }
+  const next = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await next.find({ type: 'Text', text: /^… 1 earlier call$/, in: 'pane-earlier' })).toBeDefined()
+  expect(await next.find({ type: 'Text', text: /· Read +\/g1$/ })).toBeUndefined()
+  await next.unmount()
 })
 
 test('a new turn starts an empty timeline', async ($, on) => {
